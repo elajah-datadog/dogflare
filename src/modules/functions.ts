@@ -172,9 +172,27 @@ async function handleDuplicateZip(savePath: string, dateFolderPath: string, atta
 
         // Iterate through each entry in the ZIP
         for (const entry of directory.files) {
-            console.log("this is the entry path,", entry.path);
-            const entryPath = path.join(extractionFolder, entry.path);
+
+
+            // Initialize relativePath with the full entry path
+            let relativePath = entry.path;
+
+            if (topLevelFolders.size === 1) {
+                // Remove the top-level folder from entry.path to prevent duplication
+                const segments = relativePath.split('/').slice(1); // Remove the first segment
+                relativePath = segments.join('/');
+            }
+
+            // If relativePath is empty, skip this entry (it was the top-level folder)
+            if (relativePath === '') {
+                continue;
+            }
+
+            // Construct the full path for the extracted file
+            const entryPath = path.join(extractionFolder, relativePath);
             const entryDir = path.dirname(entryPath);
+
+            console.log("this is the entry path,", entry.path);
             console.log("this is entryDir", entryDir);
             console.log("this is entryPath", entryPath);
 
