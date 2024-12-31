@@ -236,3 +236,58 @@ async function handleDuplicateZip(savePath: string, dateFolderPath: string, atta
         vscode.window.showErrorMessage(`Failed to unzip ${attachFileName}: ${errorMessage}`);
     }
 }
+
+/**
+ * Adds multiple Ticket IDs to the existing list in workspaceState if they don't already exist.
+ * 
+ * @param context - The extension context.
+ * @param ticketIds - An array of Ticket IDs to add.
+ */
+export async function addTicketIds(context: vscode.ExtensionContext, ticketIds: string | string[] ): Promise<void> {
+    try {
+        // Normalize ticketIds to an array
+        const ticketIdsArray: string[] = typeof ticketIds === 'string' ? [ticketIds] : ticketIds;
+
+        // Retrieve the existing list or initialize as an empty array if not present
+        let listOfTickets: string[] = context.workspaceState.get<string[]>('lastListOfTickets') || [];
+
+        const addedTickets: string[] = [];
+        const existingTickets: string[] = [];
+
+        // Iterate through each ticketId and categorize them
+        for (const ticketId of ticketIdsArray) {
+            if (!listOfTickets.includes(ticketId)) {
+                listOfTickets.push(ticketId);
+                addedTickets.push(ticketId);
+            } else {
+                existingTickets.push(ticketId);
+            }
+        }
+
+        // Update the workspaceState with the modified list
+        await context.workspaceState.update('lastListOfTickets', listOfTickets);
+
+        // Provide feedback for added tickets
+        if (addedTickets.length > 0) {
+            const addedMessage = addedTickets.length === 1
+                ? `Added Ticket ID "${addedTickets[0]}" to the list.`
+                : `Added ${addedTickets.length} Ticket IDs to the list: ${addedTickets.join(', ')}.`;
+            vscode.window.showInformationMessage(addedMessage);
+            console.log(`Successfully added Ticket IDs: ${addedTickets.join(', ')}.`);
+        }
+
+        // Provide feedback for existing tickets
+        if (existingTickets.length > 0) {
+            const existingMessage = existingTickets.length === 1
+                ? `Ticket ID "${existingTickets[0]}" is already in the list.`
+                : `${existingTickets.length} Ticket IDs are already in the list: ${existingTickets.join(', ')}.`;
+            vscode.window.showInformationMessage(existingMessage);
+            console.log(`Ticket IDs already in the list: ${existingTickets.join(', ')}.`);
+        }
+
+    } catch (error) {
+        // Handle unexpected errors
+        console.error(`Error adding Ticket IDs ${Array.isArray(ticketIds) ? ticketIds.join(', ') : ticketIds}:`, error);
+        vscode.window.showErrorMessage(`Error adding Ticket IDs: ${error instanceof Error ? error.message : String(error)}`);
+    }
+}

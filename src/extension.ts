@@ -2,7 +2,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { getAssigneeId, getTicketsById, getAttachmentsByTicketId } from './modules/apis';
-import { createTicketsFolder, createFoldersForTicketIds, organizeAndDownloadAttachments } from './modules/functions';
+import { createTicketsFolder, createFoldersForTicketIds, organizeAndDownloadAttachments, addTicketIds } from './modules/functions';
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
@@ -63,7 +63,7 @@ export function activate(context: vscode.ExtensionContext) {
 					if (ticketIds && ticketIds.length > 0) {
 						// Show ticket IDs in a user-friendly way
 						vscode.window.showInformationMessage(`Ticket IDs: ${ticketIds.join(', ')}`);
-						context.workspaceState.update('lastListOfTickets', ticketIds);
+						addTicketIds(context, ticketIds);
 						createFoldersForTicketIds(ticketIds);
 					} else {
 						vscode.window.showErrorMessage("No tickets found or an error occurred.");
@@ -90,7 +90,7 @@ export function activate(context: vscode.ExtensionContext) {
             if (ticketIds && ticketIds.length > 0) {
                 // Show ticket IDs in a user-friendly way
                 vscode.window.showInformationMessage(`Ticket IDs: ${ticketIds.join(', ')}`);
-				context.workspaceState.update('lastListOfTickets', ticketIds);
+				addTicketIds(context, ticketIds);
 				createFoldersForTicketIds(ticketIds);
             } else {
                 vscode.window.showErrorMessage("No tickets found or an error occurred.");
@@ -117,7 +117,7 @@ export function activate(context: vscode.ExtensionContext) {
 		
 			// Or if you have a "Fetch Tickets" step that gave you a 'ticketId', you can do that.
 			// For simplicity, let's prompt for the actual ticket ID:
-			const ticketId = await vscode.window.showInputBox({ 
+			const ticketId = await vscode.window.showInputBox({
 				prompt: "Enter the specific Ticket ID you want to download attachments for",
 				placeHolder: "e.g. 22542"
 			});
@@ -125,16 +125,27 @@ export function activate(context: vscode.ExtensionContext) {
 				vscode.window.showErrorMessage("No Ticket ID provided.");
 				return;
 			}
-		
+
 			// 1. Retrieve attachments
 			const attachments = await getAttachmentsByTicketId(ticketId);
 			if (attachments && attachments.length > 0) {
 				// 2. Organize them into date-based folders, then download
 				await organizeAndDownloadAttachments(ticketId, attachments);
+				addTicketIds(context, ticketId);
+
 			} else {
 				vscode.window.showInformationMessage("No attachments found for that ticket.");
 			}
-        } else {
+        } else if (label === "Scrub Closed Tickets") {
+			// Retrieve 'listOfTickets' from workspaceState
+			const listOfTickets = context.workspaceState.get<string>('lastListOfTickets');
+			if (!listOfTickets) {
+				vscode.window.showErrorMessage("No Assignee ID stored. Please 'Enter Email' first.");
+				return;
+			}
+			console.log("List of tickets", listOfTickets);
+
+		} else {
 			// Handle other items if needed
 			vscode.window.showInformationMessage(`Executed command: ${label}`);
 		}
