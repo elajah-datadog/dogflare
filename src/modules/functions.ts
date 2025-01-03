@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { createAuthenticatedAxios } from './apis';
+import { createAuthenticatedAxios, getAttachmentsByTicketId, TicketStatus } from './apis';
 import axios from 'axios';
 const unzipper = require('unzipper');
 
@@ -168,7 +168,7 @@ async function handleDuplicateZip(savePath: string, dateFolderPath: string, atta
 
         // Create the extraction folder
         await fs.promises.mkdir(extractionFolder, { recursive: true });
-        console.log(`Extracting ZIP to folder: ${extractionFolder}`);
+        //console.log(`Extracting ZIP to folder: ${extractionFolder}`);
 
         // Iterate through each entry in the ZIP
         for (const entry of directory.files) {
@@ -192,9 +192,9 @@ async function handleDuplicateZip(savePath: string, dateFolderPath: string, atta
             const entryPath = path.join(extractionFolder, relativePath);
             const entryDir = path.dirname(entryPath);
 
-            console.log("this is the entry path,", entry.path);
-            console.log("this is entryDir", entryDir);
-            console.log("this is entryPath", entryPath);
+           // console.log("this is the entry path,", entry.path);
+           // console.log("this is entryDir", entryDir);
+           // console.log("this is entryPath", entryPath);
 
             // Ensure the directory for the current entry exists
             await fs.promises.mkdir(entryDir, { recursive: true });
@@ -205,7 +205,7 @@ async function handleDuplicateZip(savePath: string, dateFolderPath: string, atta
             }
 
             let finalPath = entryPath;
-            console.log("this is final path", finalPath);
+           // console.log("this is final path", finalPath);
 
             // Extract the file to the final path
             await new Promise<void>((resolve, reject) => {
@@ -221,11 +221,11 @@ async function handleDuplicateZip(savePath: string, dateFolderPath: string, atta
             });
         }
 
-        console.log(`Successfully unzipped ${savePath} into ${extractionFolder}`);
+       // console.log(`Successfully unzipped ${savePath} into ${extractionFolder}`);
 
         // Delete the original ZIP file after successful extraction
         await fs.promises.unlink(savePath);
-        console.log(`Deleted original ZIP file: ${savePath}`);
+     //   console.log(`Deleted original ZIP file: ${savePath}`);
 
     } catch (zipError: unknown) { // Type as 'unknown' for better type safety
         let errorMessage = 'An unknown error occurred during ZIP extraction.';
@@ -289,5 +289,155 @@ export async function addTicketIds(context: vscode.ExtensionContext, ticketIds: 
         // Handle unexpected errors
         console.error(`Error adding Ticket IDs ${Array.isArray(ticketIds) ? ticketIds.join(', ') : ticketIds}:`, error);
         vscode.window.showErrorMessage(`Error adding Ticket IDs: ${error instanceof Error ? error.message : String(error)}`);
+    }
+}
+
+/**
+ * Removes one or multiple Ticket IDs from the workspace state and deletes their corresponding folders.
+ * 
+ * @param context - The extension context.
+ * @param ticketIds - A single Ticket ID or an array of Ticket IDs to remove.
+ */
+export async function removeTicketIds(context: vscode.ExtensionContext, ticketIds: string | string[] ): Promise<void> {
+    try {
+        // Normalize ticketIds to an array
+        const ticketIdsArray: string[] = typeof ticketIds === 'string' ? [ticketIds] : ticketIds;
+
+        // Retrieve the existing list or initialize as an empty array if not present
+        let listOfTickets: string[] = context.workspaceState.get<string[]>('lastListOfTickets') || [];
+
+        const removedTickets: string[] = [];
+        const nonExistentTickets: string[] = [];
+
+        for (const ticketId of ticketIdsArray) {
+            const ticketIndex = listOfTickets.indexOf(ticketId);
+            if (ticketIndex !== -1) {
+                // Remove the ticketId from the list
+                listOfTickets.splice(ticketIndex, 1);
+                removedTickets.push(ticketId);
+
+                // Define the path to the ticket folder
+                const ticketFolderPath = path.join(os.homedir(), 'Downloads', 'tickets', ticketId);
+
+                // Check if the folder exists before attempting to delete
+                if (fs.existsSync(ticketFolderPath)) {
+                    try {
+                        // Recursively delete the folder and its contents
+                        await fs.promises.rm(ticketFolderPath, { recursive: true, force: true });
+                        console.log(`Deleted folder: ${ticketFolderPath}`);
+                    } catch (deleteError) {
+                        console.error(`Failed to delete folder ${ticketFolderPath}:`, deleteError);
+                        vscode.window.showErrorMessage(`Failed to delete folder for Ticket ID "${ticketId}": ${deleteError instanceof Error ? deleteError.message : String(deleteError)}`);
+                    }
+                } else {
+                    console.log(`Folder does not exist for Ticket ID "${ticketId}": ${ticketFolderPath}`);
+                }
+            } else {
+                nonExistentTickets.push(ticketId);
+                console.log(`Ticket ID "${ticketId}" does not exist in the list.`);
+            }
+        }
+
+
+        await context.workspaceState.update('lastListOfTickets', listOfTickets);
+
+        if (removedTickets.length > 0) {
+            const removedMessage = removedTickets.length === 1
+                ? `Removed Ticket ID "${removedTickets[0]}" from the list and deleted its folder.`
+                : `Removed ${removedTickets.length} Ticket IDs from the list and deleted their folders: ${removedTickets.join(', ')}.`;
+            vscode.window.showInformationMessage(removedMessage);
+            console.log(removedMessage);
+        }
+
+        // Provide feedback for non-existent tickets
+        if (nonExistentTickets.length > 0) {
+            const nonExistentMessage = nonExistentTickets.length === 1
+                ? `Ticket ID "${nonExistentTickets[0]}" was not found in the list.`
+                : `${nonExistentTickets.length} Ticket IDs were not found in the list: ${nonExistentTickets.join(', ')}.`;
+            vscode.window.showWarningMessage(nonExistentMessage);
+            console.log(nonExistentMessage);
+        }
+
+        // Handle the case where no tickets were removed
+        if (removedTickets.length === 0 && nonExistentTickets.length === 0) {
+            vscode.window.showInformationMessage('No Ticket IDs were removed.');
+            console.log('No Ticket IDs were removed.');
+        }
+    } catch (error) {
+        // Handle unexpected errors
+        console.error(`Error removing Ticket IDs ${Array.isArray(ticketIds) ? ticketIds.join(', ') : ticketIds}:`, error);
+        vscode.window.showErrorMessage(`Error removing Ticket IDs: ${error instanceof Error ? error.message : String(error)}`);
+    }
+}
+
+// Receive single ticket id or array of ticket ids
+// Calls api to get attacthments from tickets
+export async function processTickets(context: vscode.ExtensionContext, ticketIds: string | string[] ): Promise<void> {
+    // Normalize ticketIds to an array
+    const tickets = Array.isArray(ticketIds) ? ticketIds : [ticketIds];
+
+    // Array to keep track of newly processed Ticket IDs that have attachments
+    const newlyProcessedTickets: string[] = [];
+
+    for (const ticketId of tickets) {
+        // 1. Retrieve attachments (ensure getAttachmentsByTicketId is defined and imported)
+        const attachments = await getAttachmentsByTicketId(ticketId);
+
+        if (attachments && attachments.length > 0) {
+            // 2. Organize them into date-based folders, then download
+            await organizeAndDownloadAttachments(ticketId, attachments);
+
+            // 3. Mark this ticket as newly processed
+            newlyProcessedTickets.push(ticketId);
+        } else {
+            vscode.window.showInformationMessage(`No attachments found for ticket ${ticketId}.`);
+            console.log(`No attachments found for ticket ${ticketId}.`);
+        }
+    }
+
+    if (newlyProcessedTickets.length > 0) {
+        // 4. Update the workspace state with the newly processed Ticket IDs
+        await addTicketIds(context, newlyProcessedTickets);
+    }
+}
+
+/**
+ * Removes all tickets with a status of "closed" by deleting their corresponding folders
+ * and updating the workspace state.
+ * 
+ * @param context - The extension context.
+ * @param ticketStatuses - An array of TicketStatus objects.
+ */
+export async function removeClosedTickets(
+    context: vscode.ExtensionContext,
+    ticketStatuses: TicketStatus[]
+): Promise<void> {
+    try {
+        // Step 1: Filter tickets with status "closed" (case-insensitive)
+        const closedTickets = ticketStatuses.filter(ticket => ticket.status.toLowerCase() === 'solved');
+
+        if (closedTickets.length === 0) {
+            vscode.window.showInformationMessage('There are no solved tickets to remove.');
+            return;
+        }
+
+        // Step 2: Extract ticket IDs from the closed tickets
+        const closedTicketIds = closedTickets.map(ticket => String(ticket.id));
+
+        // Step 3: Remove the closed ticket IDs using the existing removeTicketIds function
+        await removeTicketIds(context, closedTicketIds);
+
+        // Step 4: Provide additional feedback if needed
+        if (closedTicketIds.length > 0) {
+            const message = closedTicketIds.length === 1
+                ? `Removed closed Ticket ID "${closedTicketIds[0]}".`
+                : `Removed ${closedTicketIds.length} closed Ticket IDs: ${closedTicketIds.join(', ')}.`;
+            vscode.window.showInformationMessage(message);
+            console.log(message);
+        }
+    } catch (error) {
+        // Handle any unexpected errors
+        console.error('Error removing closed tickets:', error);
+        vscode.window.showErrorMessage(`Error removing closed tickets: ${error instanceof Error ? error.message : String(error)}`);
     }
 }

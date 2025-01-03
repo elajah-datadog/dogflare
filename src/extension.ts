@@ -1,8 +1,9 @@
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { getAssigneeId, getTicketsById, getAttachmentsByTicketId } from './modules/apis';
-import { createTicketsFolder, createFoldersForTicketIds, organizeAndDownloadAttachments, addTicketIds } from './modules/functions';
+import { getAssigneeId, getTicketsById, getAttachmentsByTicketId, fetchTicketsStatus } from './modules/apis';
+import { createTicketsFolder, createFoldersForTicketIds, organizeAndDownloadAttachments, 
+	     addTicketIds, processTickets, removeClosedTickets } from './modules/functions';
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
@@ -65,6 +66,7 @@ export function activate(context: vscode.ExtensionContext) {
 						vscode.window.showInformationMessage(`Ticket IDs: ${ticketIds.join(', ')}`);
 						addTicketIds(context, ticketIds);
 						createFoldersForTicketIds(ticketIds);
+						await processTickets(context, ticketIds);
 					} else {
 						vscode.window.showErrorMessage("No tickets found or an error occurred.");
 					}
@@ -92,6 +94,7 @@ export function activate(context: vscode.ExtensionContext) {
                 vscode.window.showInformationMessage(`Ticket IDs: ${ticketIds.join(', ')}`);
 				addTicketIds(context, ticketIds);
 				createFoldersForTicketIds(ticketIds);
+				await processTickets(context, ticketIds);
             } else {
                 vscode.window.showErrorMessage("No tickets found or an error occurred.");
             }
@@ -126,7 +129,8 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			// 1. Retrieve attachments
+			await processTickets(context, ticketId);
+			/* 1. Retrieve attachments
 			const attachments = await getAttachmentsByTicketId(ticketId);
 			if (attachments && attachments.length > 0) {
 				// 2. Organize them into date-based folders, then download
@@ -135,7 +139,8 @@ export function activate(context: vscode.ExtensionContext) {
 
 			} else {
 				vscode.window.showInformationMessage("No attachments found for that ticket.");
-			}
+			}*/
+
         } else if (label === "Scrub Closed Tickets") {
 			// Retrieve 'listOfTickets' from workspaceState
 			const listOfTickets = context.workspaceState.get<string>('lastListOfTickets');
@@ -144,6 +149,10 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 			console.log("List of tickets", listOfTickets);
+
+			const ticketStatuses = await fetchTicketsStatus(listOfTickets);
+
+			await removeClosedTickets(context, ticketStatuses);
 
 		} else {
 			// Handle other items if needed
