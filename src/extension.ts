@@ -1,18 +1,14 @@
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { getAssigneeId, getTicketsById, getAttachmentsByTicketId, fetchTicketsStatus } from './modules/apis';
-import { createTicketsFolder, createFoldersForTicketIds, organizeAndDownloadAttachments, 
-	     addTicketIds, processTickets, removeClosedTickets } from './modules/functions';
+import { getAssigneeId, getTicketsById, fetchTicketsStatus } from './modules/apis';
+import { createTicketsFolder, createFoldersForTicketIds, processTickets, removeClosedTickets, WorkspaceData } from './modules/functions';
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
 export function activate(context: vscode.ExtensionContext) {
 
 	const disposable = vscode.commands.registerCommand('dogflare.helloWorld', () => {
-
-		const tickets = context.workspaceState.get<string>('lastListOfTickets');
-		console.log(tickets);
 
 		const email = context.workspaceState.get<string>('lastEmailUsed');
 		console.log(email);
@@ -22,7 +18,15 @@ export function activate(context: vscode.ExtensionContext) {
 
 		const path = context.workspaceState.get<string>('lastFolderPath');
 		console.log(path);
-	});
+
+		// Define the workspace data key
+		const WORKSPACE_DATA_KEY = 'ticketData';
+
+		// Retrieve existing workspace data or initialize as empty object
+		const workspaceData = context.workspaceState.get<WorkspaceData>(WORKSPACE_DATA_KEY);
+
+		console.log(workspaceData);
+});
 
 	// Tree in sidepanel view 
 	const treeDataProvider = new DogFlareTreeDataProvider(context);
@@ -64,9 +68,9 @@ export function activate(context: vscode.ExtensionContext) {
 					if (ticketIds && ticketIds.length > 0) {
 						// Show ticket IDs in a user-friendly way
 						vscode.window.showInformationMessage(`Ticket IDs: ${ticketIds.join(', ')}`);
-						addTicketIds(context, ticketIds);
-						createFoldersForTicketIds(ticketIds);
 						await processTickets(context, ticketIds);
+						//createFoldersForTicketIds(ticketIds);
+						//await processTickets(context, ticketIds);
 					} else {
 						vscode.window.showErrorMessage("No tickets found or an error occurred.");
 					}
@@ -89,11 +93,11 @@ export function activate(context: vscode.ExtensionContext) {
                 return;
             }
             const ticketIds = await getTicketsById(storedID);
+			console.log("test test", ticketIds);
             if (ticketIds && ticketIds.length > 0) {
                 // Show ticket IDs in a user-friendly way
-                vscode.window.showInformationMessage(`Ticket IDs: ${ticketIds.join(', ')}`);
-				addTicketIds(context, ticketIds);
-				createFoldersForTicketIds(ticketIds);
+				console.log("test test 2", ticketIds);
+                vscode.window.showInformationMessage(`Ticket IDs: ${ticketIds.join(', ')}`);;
 				await processTickets(context, ticketIds);
             } else {
                 vscode.window.showErrorMessage("No tickets found or an error occurred.");
@@ -130,16 +134,6 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 
 			await processTickets(context, ticketId);
-			/* 1. Retrieve attachments
-			const attachments = await getAttachmentsByTicketId(ticketId);
-			if (attachments && attachments.length > 0) {
-				// 2. Organize them into date-based folders, then download
-				await organizeAndDownloadAttachments(ticketId, attachments);
-				addTicketIds(context, ticketId);
-
-			} else {
-				vscode.window.showInformationMessage("No attachments found for that ticket.");
-			}*/
 
         } else if (label === "Scrub Closed Tickets") {
 			// Retrieve 'listOfTickets' from workspaceState
@@ -154,6 +148,29 @@ export function activate(context: vscode.ExtensionContext) {
 
 			await removeClosedTickets(context, ticketStatuses);
 
+		} else if (label === "Reset"){
+			const userConfirmed = await vscode.window.showWarningMessage(
+				'Are you sure you want to reset all workspace data? This action cannot be undone.',
+				{ modal: true },
+				'Yes',
+				'No'
+			);
+	
+			if (userConfirmed === 'Yes') {
+				try {
+
+					await context.workspaceState.update("ticketData", {});
+
+					vscode.window.showInformationMessage('Workspace data has been successfully reset.');
+					console.log('Workspace data has been successfully reset.');
+				} catch (error) {
+					console.error('Error resetting workspace data:', error);
+					vscode.window.showErrorMessage(`Error resetting workspace data: ${error instanceof Error ? error.message : String(error)}`);
+				}
+			} else {
+				vscode.window.showInformationMessage('Workspace data reset was canceled.');
+				console.log('Workspace data reset was canceled by the user.');
+			}
 		} else {
 			// Handle other items if needed
 			vscode.window.showInformationMessage(`Executed command: ${label}`);
@@ -204,7 +221,10 @@ class DogFlareTreeDataProvider implements vscode.TreeDataProvider<TreeItem> {
 				new TreeItem("Enter Email"),
                 new TreeItem("Fetch Tickets"),
                 new TreeItem("Fetch Attachments"),
-                new TreeItem("Scrub Closed Tickets")
+                new TreeItem("Scrub Closed Tickets"),
+				new TreeItem(""),
+				new TreeItem(""),
+				new TreeItem("Reset"),
             );
 
             return items;

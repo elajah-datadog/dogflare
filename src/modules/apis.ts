@@ -1,6 +1,7 @@
 import axios from 'axios';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { AttachmentInfo } from './functions';
 
 // Load dotenv 
 require('dotenv').config({ path: '/Users/elajah.gijsbertha/dogflare/.env' });
@@ -74,76 +75,50 @@ export async function getTicketsById(storedID: string): Promise<string[] | null>
         return null;
     }
 }
-
-// Interface to hold information for attachments
-export interface AttachmentInfo {
-    url: string;        // The content_url (direct link to the file)
-    createdAt: string;  // e.g. "2024-12-19T23:02:36Z"
-    fileName: string;   // e.g. "logs.txt" or "image.png"
-    id: string;         // The id of the attachment
-  }
-
-function appendCounterToFileName(fileName: string, counter: number): string {
-    const ext = path.extname(fileName);
-    const baseName = path.basename(fileName, ext);
-    return `${baseName}(${counter})${ext}`;
-}
-
 // Fetch all attachments from ticket comments.
 // Returns an array of { url, createdAt, fileName }, or null if none found.
 export async function getAttachmentsByTicketId(ticketId: string): Promise<AttachmentInfo[] | null> {
-    const url = `https://${ZENDESK_SUBDOMAIN}.zendesk.com/api/v2/tickets/${encodeURIComponent(ticketId)}/comments.json`;
+    // Define your Zendesk credentials and subdomain
+    const ZENDESK_SUBDOMAIN = process.env.ZENDESK_SUBDOMAIN!;
+    const ZENDESK_EMAIL = process.env.ZENDESK_EMAIL!;
+    const ZENDESK_API_TOKEN = process.env.ZENDESK_API_TOKEN!;
+
+    const apiUrl = `https://${ZENDESK_SUBDOMAIN}.zendesk.com/api/v2/tickets/${ticketId}/comments.json`; // Example endpoint
 
     try {
-        const response = await axios.get(url, {
+        const response = await axios.get(apiUrl, {
             headers: {
                 'Authorization': `Basic ${Buffer.from(`${ZENDESK_EMAIL}/token:${ZENDESK_API_TOKEN}`).toString('base64')}`,
                 'Content-Type': 'application/json'
             }
         });
 
-        const data = response.data;
-        if (data.comments && Array.isArray(data.comments)) {
-            const allAttachments: AttachmentInfo[] = [];
-            const fileNameCounts: { [fileName: string]: number } = {};
+        if (response.status === 200) {
+            const comments = response.data.comments;
+            const attachments: AttachmentInfo[] = [];
 
-            // Collect attachments from each comment
-            for (const comment of data.comments) {
-                if (comment.attachments && Array.isArray(comment.attachments)) {
-                    for (const attach of comment.attachments) {
-                        let uniqueFileName = attach.file_name;
-        
-                        // Check if the filename already exists in the current batch
-                        if (fileNameCounts[attach.file_name]) {
-                            fileNameCounts[attach.file_name] += 1;
-                            uniqueFileName = appendCounterToFileName(attach.file_name, fileNameCounts[attach.file_name]);
-                        } else {
-                            fileNameCounts[attach.file_name] = 1;
-                        }
-        
-                        allAttachments.push({
-                            url: attach.content_url,
-                            createdAt: comment.created_at, 
-                            fileName: uniqueFileName,
-                            id: attach.id
+            for (const comment of comments) {
+                if (comment.attachments && comment.attachments.length > 0) {
+                    for (const attachment of comment.attachments) {
+                        attachments.push({
+                            fileName: attachment.file_name,
+                            url: attachment.content_url,
+                            createdAt: comment.created_at,
+                            hash: ''
                         });
                     }
                 }
             }
 
-            if (allAttachments.length > 0) {
-                console.log(`Retrieved attachments for ticket ${ticketId}:`, allAttachments);
-                return allAttachments;
-            } else {
-                console.warn(`No attachments found in comments for ticket ID: ${ticketId}`);
-                return null;
-            }
+            return attachments;
         } else {
-            console.warn(`No comments found for ticket ID: ${ticketId}`);
+            vscode.window.showErrorMessage(`Failed to retrieve attachments for Ticket ID "${ticketId}". HTTP Status: ${response.status}`);
+            console.error(`Failed to retrieve attachments for Ticket ID "${ticketId}". HTTP Status: ${response.status}`);
             return null;
         }
-    } catch (error: any) {
-        console.error(`Error fetching attachments for ticket ${ticketId}: ${error.message}`);
+    } catch (error) {
+        vscode.window.showErrorMessage(`Error retrieving attachments for Ticket ID "${ticketId}": ${error instanceof Error ? error.message : String(error)}`);
+        console.error(`Error retrieving attachments for Ticket ID "${ticketId}":`, error);
         return null;
     }
 }

@@ -2,11 +2,21 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import crypto from 'crypto';
 import { createAuthenticatedAxios, getAttachmentsByTicketId, TicketStatus } from './apis';
-import axios from 'axios';
 const unzipper = require('unzipper');
 
-
+// Function to compute SHA256 hash of a file
+async function computeFileHash(filePath: string): Promise<string> {
+    console.log("please work 2.5", filePath);
+    return new Promise<string>((resolve, reject) => {
+        const hash = crypto.createHash('sha256');
+        const stream = fs.createReadStream(filePath);
+        stream.on('error', err => reject(err));
+        stream.on('data', chunk => hash.update(chunk));
+        stream.on('end', () => resolve(hash.digest('hex')));
+    });
+}
 
 // Utility to ensure folder creation
 function ensureFolderExists(folderPath: string) {
@@ -59,15 +69,30 @@ export interface AttachmentInfo {
     url: string;        // The content_url (direct link to the file)
     createdAt: string;  // e.g. "2024-12-19T23:02:36Z"
     fileName: string;   // e.g. "logs.txt" or "image.png"
+    hash: string;
   }
+
+export interface TicketData {
+    attachments: AttachmentInfo[];
+}
+
+export interface WorkspaceData {
+    [ticketId: string]: TicketData;
+}
+
 
 // Organizes attachments by created date (YYYY-MM-DD) under:
 // ~/Downloads/tickets/{ticketId}/{dateFolder}/
 // Then downloads the file to that folder.
-export async function organizeAndDownloadAttachments(ticketId: string, attachments: AttachmentInfo[]) {
+export async function organizeAndDownloadAttachments(ticketId: string, attachments: AttachmentInfo[], existingHashes: Set<string>): Promise<AttachmentInfo[]> {
     // Root folder: ~/Downloads/tickets/<ticketId>
     const ticketFolder = path.join(os.homedir(), 'Downloads', 'tickets', ticketId);
     ensureFolderExists(ticketFolder);
+
+    const successfulDownloads: AttachmentInfo[] = [];
+
+    // Create an authenticated Axios instance once
+    const axiosInstance = createAuthenticatedAxios();
 
     // For each attachment, parse date, create subfolder, download file
     for (const attach of attachments) {
@@ -82,15 +107,38 @@ export async function organizeAndDownloadAttachments(ticketId: string, attachmen
 
         try {
             // Download the file data
-            const token = createAuthenticatedAxios();
-            const savePath = await downloadFile(attach.url, filePath, token);
+            const savePath = await downloadFile(attach.url, filePath, axiosInstance);
 
             console.log(`Saved attachment: ${savePath}`);
+
+            // Compute the hash of the downloaded file
+            const computedHash = await computeFileHash(savePath);
+            console.log(`Computed hash for ${savePath}: ${computedHash}`);
             
+            // Check if the hash already exists
+            if (existingHashes.has(computedHash)) {
+                console.log(`Duplicate attachment detected for hash ${computedHash}. Deleting downloaded file.`);
+                fs.unlinkSync(savePath); // Delete the duplicate file
+                vscode.window.showWarningMessage(`Duplicate attachment detected and skipped: ${attach.fileName}`);
+                continue; // Skip adding to successfulDownloads
+            }
+
             // Check if the file is a ZIP archive
             if (path.extname(savePath).toLowerCase() === '.zip') {
                 await handleDuplicateZip(savePath, dateFolderPath, attach.fileName);
             }
+
+            // Update the attachment's hash
+            const updatedAttachment: AttachmentInfo = {
+                ...attach,
+                hash: computedHash,         // Update the hash field
+            };
+
+            // Add to successful downloads
+            successfulDownloads.push(updatedAttachment);
+
+            // Add the new hash to existingHashes to prevent duplicates in this batch
+            existingHashes.add(computedHash);
 
         } catch (err: any) {
             console.error(`Failed to download attachment from ${attach.url}: ${err.message}`);
@@ -100,11 +148,14 @@ export async function organizeAndDownloadAttachments(ticketId: string, attachmen
 
     // Optionally, notify the user in VS Code
     if (attachments.length > 0) {
-        vscode.window.showInformationMessage(`Downloaded ${attachments.length} attachments for ticket ${ticketId}.`);
+        vscode.window.showInformationMessage(`Downloaded ${successfulDownloads.length} out of ${attachments.length} attachments for ticket ${ticketId}.`);
     } else {
         vscode.window.showWarningMessage(`No attachments to download for ticket ${ticketId}.`);
     }
+
+    return successfulDownloads; // Return the array of successfully downloaded attachments
 }
+
 
 async function downloadFile(downloadUrl: string, savePath: string, axiosInstance: any): Promise<string> {
     try {
@@ -243,52 +294,68 @@ async function handleDuplicateZip(savePath: string, dateFolderPath: string, atta
  * @param context - The extension context.
  * @param ticketIds - An array of Ticket IDs to add.
  */
-export async function addTicketIds(context: vscode.ExtensionContext, ticketIds: string | string[] ): Promise<void> {
+export async function addTicketIds( context: vscode.ExtensionContext, ticketsToAdd: { [ticketId: string]: AttachmentInfo[] } // Corrected type: Maps ticket ID to array of AttachmentInfo
+): Promise<{ success: boolean; addedTickets: string[]; existingTickets: string[] }> {
     try {
-        // Normalize ticketIds to an array
-        const ticketIdsArray: string[] = typeof ticketIds === 'string' ? [ticketIds] : ticketIds;
+        // Define the workspace data key
+        const WORKSPACE_DATA_KEY = 'ticketData';
 
-        // Retrieve the existing list or initialize as an empty array if not present
-        let listOfTickets: string[] = context.workspaceState.get<string[]>('lastListOfTickets') || [];
+        // Retrieve existing workspace data or initialize as an empty object
+        const workspaceData: WorkspaceData = context.workspaceState.get<WorkspaceData>(WORKSPACE_DATA_KEY) || {};
 
         const addedTickets: string[] = [];
         const existingTickets: string[] = [];
 
-        // Iterate through each ticketId and categorize them
-        for (const ticketId of ticketIdsArray) {
-            if (!listOfTickets.includes(ticketId)) {
-                listOfTickets.push(ticketId);
+        for (const [ticketId, attachments] of Object.entries(ticketsToAdd)) {
+            if (!workspaceData[ticketId]) {
+                // Add new ticket with its attachments
+                workspaceData[ticketId] = {
+                    attachments: attachments
+                };
                 addedTickets.push(ticketId);
+                console.log(`Added new ticket ID: ${ticketId} with ${attachments.length} attachments.`);
             } else {
                 existingTickets.push(ticketId);
+                console.log(`Ticket ID already exists: ${ticketId}`);
             }
         }
 
-        // Update the workspaceState with the modified list
-        await context.workspaceState.update('lastListOfTickets', listOfTickets);
+        // Update the workspaceState with the modified data
+        const updateSuccess = await context.workspaceState.update(WORKSPACE_DATA_KEY, workspaceData);
 
-        // Provide feedback for added tickets
-        if (addedTickets.length > 0) {
-            const addedMessage = addedTickets.length === 1
-                ? `Added Ticket ID "${addedTickets[0]}" to the list.`
-                : `Added ${addedTickets.length} Ticket IDs to the list: ${addedTickets.join(', ')}.`;
-            vscode.window.showInformationMessage(addedMessage);
-            console.log(`Successfully added Ticket IDs: ${addedTickets.join(', ')}.`);
-        }
 
-        // Provide feedback for existing tickets
-        if (existingTickets.length > 0) {
-            const existingMessage = existingTickets.length === 1
-                ? `Ticket ID "${existingTickets[0]}" is already in the list.`
-                : `${existingTickets.length} Ticket IDs are already in the list: ${existingTickets.join(', ')}.`;
-            vscode.window.showInformationMessage(existingMessage);
-            console.log(`Ticket IDs already in the list: ${existingTickets.join(', ')}.`);
-        }
+            // Provide feedback for added tickets
+            if (addedTickets.length > 0) {
+                const addedMessage = addedTickets.length === 1
+                    ? `Added Ticket ID "${addedTickets[0]}" with ${ticketsToAdd[addedTickets[0]].length} attachments.`
+                    : `Added ${addedTickets.length} Ticket IDs with their attachments.`;
+                vscode.window.showInformationMessage(addedMessage);
+                console.log(`Successfully added Ticket IDs: ${addedTickets.join(', ')}.`);
+            }
 
+            // Provide feedback for existing tickets
+            if (existingTickets.length > 0) {
+                const existingMessage = existingTickets.length === 1
+                    ? `Ticket ID "${existingTickets[0]}" is already in the list.`
+                    : `${existingTickets.length} Ticket IDs are already in the list: ${existingTickets.join(', ')}.`;
+                vscode.window.showInformationMessage(existingMessage);
+                console.log(`Ticket IDs already in the list: ${existingTickets.join(', ')}.`);
+            }
+
+            return {
+                success: true,
+                addedTickets,
+                existingTickets
+            };
     } catch (error) {
         // Handle unexpected errors
-        console.error(`Error adding Ticket IDs ${Array.isArray(ticketIds) ? ticketIds.join(', ') : ticketIds}:`, error);
+        console.error(`Error adding Ticket IDs:`, error);
         vscode.window.showErrorMessage(`Error adding Ticket IDs: ${error instanceof Error ? error.message : String(error)}`);
+        return {
+            success: false,
+            addedTickets: [],
+            existingTickets: []
+        };
     }
 }
 
@@ -376,28 +443,62 @@ export async function processTickets(context: vscode.ExtensionContext, ticketIds
     // Normalize ticketIds to an array
     const tickets = Array.isArray(ticketIds) ? ticketIds : [ticketIds];
 
-    // Array to keep track of newly processed Ticket IDs that have attachments
-    const newlyProcessedTickets: string[] = [];
+    // Object to map ticket IDs to their successful downloads
+    const ticketsToAdd: { [ticketId: string]: AttachmentInfo[] } = {};
+
+        // Retrieve existing hashes from workspaceData
+        const WORKSPACE_DATA_KEY = 'ticketData';
+        const workspaceData: WorkspaceData = context.workspaceState.get<WorkspaceData>(WORKSPACE_DATA_KEY) || {};
+    
+        const existingHashes = new Set<string>();
+        for (const ticket of Object.values(workspaceData)) {
+            for (const attachment of ticket.attachments) {
+                existingHashes.add(attachment.hash);
+            }
+        }
 
     for (const ticketId of tickets) {
-        // 1. Retrieve attachments (ensure getAttachmentsByTicketId is defined and imported)
-        const attachments = await getAttachmentsByTicketId(ticketId);
+        try {
+            // 1. Retrieve attachments (ensure getAttachmentsByTicketId is defined and imported)
+            const attachments = await getAttachmentsByTicketId(ticketId);
 
-        if (attachments && attachments.length > 0) {
-            // 2. Organize them into date-based folders, then download
-            await organizeAndDownloadAttachments(ticketId, attachments);
+            if (attachments && attachments.length > 0) {
+                // 2. Organize them into date-based folders, then download
+                console.log("Attachments:", attachments);
+                const successfulDownloads = await organizeAndDownloadAttachments(ticketId, attachments, existingHashes);
 
-            // 3. Mark this ticket as newly processed
-            newlyProcessedTickets.push(ticketId);
-        } else {
-            vscode.window.showInformationMessage(`No attachments found for ticket ${ticketId}.`);
-            console.log(`No attachments found for ticket ${ticketId}.`);
+                if (successfulDownloads.length > 0) {
+                    // 3. Map the successful downloads to the ticket ID
+                    ticketsToAdd[ticketId] = successfulDownloads;
+                    console.log(`Successfully processed ticket ID: ${ticketId} with ${successfulDownloads.length} attachments.`);
+                } else {
+                    vscode.window.showWarningMessage(`No attachments were successfully downloaded for ticket ${ticketId}.`);
+                    console.log(`No attachments were successfully downloaded for ticket ${ticketId}.`);
+                }
+            } else {
+                vscode.window.showInformationMessage(`No attachments found for ticket ${ticketId}.`);
+                console.log(`No attachments found for ticket ${ticketId}.`);
+            }
+        } catch (error) {
+            console.error(`Error processing ticket ID ${ticketId}:`, error);
+            vscode.window.showErrorMessage(`Error processing ticket ID ${ticketId}: ${error instanceof Error ? error.message : String(error)}`);
         }
     }
 
-    if (newlyProcessedTickets.length > 0) {
-        // 4. Update the workspace state with the newly processed Ticket IDs
-        await addTicketIds(context, newlyProcessedTickets);
+    // 4. Add the collected tickets and their attachments to the workspace
+    const ticketIdsAdded = Object.keys(ticketsToAdd);
+    if (ticketIdsAdded.length > 0) {
+        const result = await addTicketIds(context, ticketsToAdd);
+        if (result.success) {
+            vscode.window.showInformationMessage(`Successfully added ${result.addedTickets.length} new ticket(s).`);
+            if (result.existingTickets.length > 0) {
+                vscode.window.showInformationMessage(`${result.existingTickets.length} ticket(s) already existed.`);
+            }
+        } else {
+            vscode.window.showErrorMessage('Failed to add some or all tickets to the workspace.');
+        }
+    } else {
+        vscode.window.showInformationMessage('No new tickets were added to the workspace.');
     }
 }
 
