@@ -106,40 +106,33 @@ export async function organizeAndDownloadAttachments(ticketId: string, attachmen
         console.log(`Downloading attachment to ${filePath} from ${attach.url}`);
 
         try {
-            // Download the file data
-            const savePath = await downloadFile(attach.url, filePath, axiosInstance);
+            // Download the file data with duplicate checking
+            const savedPath = await downloadFile(attach.url, filePath, axiosInstance, existingHashes);
 
-            console.log(`Saved attachment: ${savePath}`);
+            if (savedPath) {
+                console.log(`Saved attachment: ${savedPath}`);
 
-            // Compute the hash of the downloaded file
-            const computedHash = await computeFileHash(savePath);
-            console.log(`Computed hash for ${savePath}: ${computedHash}`);
-            
-            // Check if the hash already exists
-            if (existingHashes.has(computedHash)) {
-                console.log(`Duplicate attachment detected for hash ${computedHash}. Deleting downloaded file.`);
-                fs.unlinkSync(savePath); // Delete the duplicate file
-                vscode.window.showWarningMessage(`Duplicate attachment detected and skipped: ${attach.fileName}`);
-                continue; // Skip adding to successfulDownloads
-            }
+                // Compute the hash of the downloaded file
+                const computedHash = await computeFileHash(savedPath);
+                console.log(`Computed hash for ${savedPath}: ${computedHash}`);
 
-            // Check if the file is a ZIP archive
-            if (path.extname(savePath).toLowerCase() === '.zip') {
-                await handleDuplicateZip(savePath, dateFolderPath, attach.fileName);
-            }
-
-            // Update the attachment's hash
-            const updatedAttachment: AttachmentInfo = {
+                // Update the attachment's hash
+                const downloads: AttachmentInfo = {
                 ...attach,
                 hash: computedHash,         // Update the hash field
-            };
+                };
+                console.log("testtest 3", downloads);
 
-            // Add to successful downloads
-            successfulDownloads.push(updatedAttachment);
+                // Check if the file is a ZIP archive
+                if (path.extname(savedPath).toLowerCase() === '.zip') {
+                    await handleDuplicateZip(savedPath, dateFolderPath, attach.fileName);
+                }
 
-            // Add the new hash to existingHashes to prevent duplicates in this batch
-            existingHashes.add(computedHash);
-
+                existingHashes.add(computedHash);
+                successfulDownloads.push(downloads);
+            } else {
+                console.log(`Skipped duplicate attachment: ${attach.fileName}`);
+            }
         } catch (err: any) {
             console.error(`Failed to download attachment from ${attach.url}: ${err.message}`);
             vscode.window.showErrorMessage(`Failed to download attachment from ${attach.url}: ${err.message}`);
@@ -156,25 +149,83 @@ export async function organizeAndDownloadAttachments(ticketId: string, attachmen
     return successfulDownloads; // Return the array of successfully downloaded attachments
 }
 
+/**
+ * Downloads a file from the given URL and saves it to the specified path using streams.
+ * Computes the SHA256 hash on-the-fly and skips writing if a duplicate is detected.
+ * 
+ * @param downloadUrl - The URL to download the file from.
+ * @param savePath - The local path where the file will be saved.
+ * @param axiosInstance - An authenticated Axios instance.
+ * @param existingHashes - A Set containing all existing hashes to check against.
+ * @returns A promise that resolves to the savePath if the file is unique and saved, or null if skipped.
+ */
+async function downloadFile(downloadUrl: string, savePath: string, axiosInstance: any, existingHashes: Set<string>): Promise<string | null> {
+    console.log(`Initiating download from ${downloadUrl} to ${savePath}`);
 
-async function downloadFile(downloadUrl: string, savePath: string, axiosInstance: any): Promise<string> {
-    try {
-        const response = await axiosInstance.get(downloadUrl, { responseType: 'arraybuffer' });
+    // Initialize hash computation
+    const hash = crypto.createHash('sha256');
 
-        if (response.status !== 200) {
-            throw new Error(`Failed to download file. HTTP Status: ${response.status}`);
-        }
+    // Create a writable stream to a temporary file
+    const tempSavePath = `${savePath}.temp`;
+    const writer = fs.createWriteStream(tempSavePath);
 
-        // Save the file to disk
-        fs.writeFileSync(savePath, response.data);
-        console.log(`Attachment saved to ${savePath}`);
-    } catch (error: any) {
-        console.error(`Error downloading file from ${downloadUrl}: ${error.message}`);
-        vscode.window.showErrorMessage(`Error downloading file: ${error.message}`);
-        throw error;
-    }
+    return new Promise<string | null>((resolve, reject) => {
+        axiosInstance.get(downloadUrl, { responseType: 'stream' })
+            .then((response: any) => { // Explicitly type 'response' as AxiosResponse
+                if (response.status !== 200) {
+                    throw new Error(`Failed to download file. HTTP Status: ${response.status}`);
+                }
 
-    return savePath;
+                // Listen for data chunks to compute hash on-the-fly
+                response.data.on('data', (chunk: Buffer) => {
+                    hash.update(chunk);
+                });
+
+                // Pipe the response data to the temporary file
+                response.data.pipe(writer);
+
+                // Handle stream finish event
+                writer.on('finish', () => {
+                    const computedHash = hash.digest('hex');
+                    console.log(`Computed hash for ${savePath}: ${computedHash}`);
+
+                    if (existingHashes.has(computedHash)) {
+                        console.log(`Duplicate detected for hash ${computedHash}. Skipping file.`);
+                        // Delete the temporary file
+                        fs.unlinkSync(tempSavePath);
+                        vscode.window.showWarningMessage(`Duplicate attachment detected and skipped: ${path.basename(savePath)}`);
+                        resolve(null); // Indicate that the file was skipped
+                    } else {
+                        // Rename the temp file to the final save path
+                        fs.renameSync(tempSavePath, savePath);
+                        console.log(`File saved successfully to ${savePath}`);
+                        resolve(savePath); // Indicate successful save
+                    }
+                });
+
+                // Handle write stream errors
+                writer.on('error', (err: Error) => {
+                    console.error(`Error writing file to ${tempSavePath}:`, err);
+                    fs.unlinkSync(tempSavePath); // Clean up temp file
+                    reject(err);
+                });
+
+                // Handle response data errors
+                response.data.on('error', (err: Error) => {
+                    console.error(`Error during download from ${downloadUrl}:`, err);
+                    writer.close();
+                    fs.unlinkSync(tempSavePath); // Clean up temp file
+                    reject(err);
+                });
+            })
+            .catch((err: Error) => { // Explicitly type 'err' as Error
+                console.error(`Error downloading file from ${downloadUrl}:`, err);
+                writer.close();
+                fs.unlinkSync(tempSavePath); // Clean up temp file
+                vscode.window.showErrorMessage(`Error downloading file: ${err.message}`);
+                reject(err);
+            });
+    });
 }
 
 async function handleDuplicateZip(savePath: string, dateFolderPath: string, attachFileName: string): Promise<void> {
@@ -466,7 +517,7 @@ export async function processTickets(context: vscode.ExtensionContext, ticketIds
                 // 2. Organize them into date-based folders, then download
                 console.log("Attachments:", attachments);
                 const successfulDownloads = await organizeAndDownloadAttachments(ticketId, attachments, existingHashes);
-
+                console.log("testtest 4", successfulDownloads);
                 if (successfulDownloads.length > 0) {
                     // 3. Map the successful downloads to the ticket ID
                     ticketsToAdd[ticketId] = successfulDownloads;
