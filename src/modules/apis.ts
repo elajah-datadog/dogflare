@@ -56,9 +56,9 @@ export async function getTicketsById(storedID: string): Promise<string[] | null>
 
         // "tickets" is an array of ticket objects
         if (data.tickets && Array.isArray(data.tickets) && data.tickets.length > 0) {
-            // Extract each ticket's ID
+            // Extract each ticket's ID except tickets that are solved or closed
             const ticketIds = data.tickets
-                .filter((ticket: any) => ticket.status !== 'solved')
+                .filter((ticket: any) => ticket.status !== 'solved' && ticket.status !== 'closed')
                 .map((ticket: any) => String(ticket.id));
 
             // Print to the Debug Console in VS Code
@@ -75,6 +75,7 @@ export async function getTicketsById(storedID: string): Promise<string[] | null>
         return null;
     }
 }
+
 // Fetch all attachments from ticket comments.
 // Returns an array of { url, createdAt, fileName }, or null if none found.
 export async function getAttachmentsByTicketId(ticketId: string): Promise<AttachmentInfo[] | null> {

@@ -66,24 +66,31 @@ export function createFoldersForTicketIds(ticketIds: string[]) {
 
 // Interface to hold information for attachments
 export interface AttachmentInfo {
-    url: string;        // The content_url (direct link to the file)
-    createdAt: string;  // e.g. "2024-12-19T23:02:36Z"
-    fileName: string;   // e.g. "logs.txt" or "image.png"
-    hash: string;
+    url: string;         // The content_url (direct link to the file)
+    createdAt: string;   // e.g. "2024-12-19T23:02:36Z"
+    fileName: string;    // e.g. "logs.txt" or "image.png"
+    hash: string;        // Hash value of attachment
   }
 
+// Interface ticket number and attachments connected to set ticket
 export interface TicketData {
     attachments: AttachmentInfo[];
 }
 
+// Interface to hold all the data together
 export interface WorkspaceData {
     [ticketId: string]: TicketData;
 }
 
-
-// Organizes attachments by created date (YYYY-MM-DD) under:
-// ~/Downloads/tickets/{ticketId}/{dateFolder}/
-// Then downloads the file to that folder.
+/**
+ * Organizes attachments by created date (YYYY-MM-DD) under: ~/Downloads/tickets/{ticketId}/{dateFolder}/
+ * Then downloads the file to that folder. While preventing dedup
+ * 
+ * @param ticketId - Ticket IDs to add.
+ * @param attachments - Attachments to be saved for the given ticketID
+ * @param existingHashes - A Set containing all existing hashes to check against.
+ * @returns A promise that resolves to the savePath if the file is unique and saved, or null if skipped.
+ */
 export async function organizeAndDownloadAttachments(ticketId: string, attachments: AttachmentInfo[], existingHashes: Set<string>): Promise<AttachmentInfo[]> {
     // Root folder: ~/Downloads/tickets/<ticketId>
     const ticketFolder = path.join(os.homedir(), 'Downloads', 'tickets', ticketId);
@@ -128,6 +135,7 @@ export async function organizeAndDownloadAttachments(ticketId: string, attachmen
                     await handleDuplicateZip(savedPath, dateFolderPath, attach.fileName);
                 }
 
+                // Add recently downloaded hash to list to prevent dedup and push the succesfull download
                 existingHashes.add(computedHash);
                 successfulDownloads.push(downloads);
             } else {
@@ -411,28 +419,33 @@ export async function addTicketIds( context: vscode.ExtensionContext, ticketsToA
 }
 
 /**
- * Removes one or multiple Ticket IDs from the workspace state and deletes their corresponding folders.
+ * Removes specified Ticket IDs from the workspace data and deletes their corresponding folders.
  * 
  * @param context - The extension context.
  * @param ticketIds - A single Ticket ID or an array of Ticket IDs to remove.
  */
-export async function removeTicketIds(context: vscode.ExtensionContext, ticketIds: string | string[] ): Promise<void> {
+export async function removeTicketIds(context: vscode.ExtensionContext, ticketIds: string | string[]): Promise<void> {
     try {
         // Normalize ticketIds to an array
         const ticketIdsArray: string[] = typeof ticketIds === 'string' ? [ticketIds] : ticketIds;
 
-        // Retrieve the existing list or initialize as an empty array if not present
-        let listOfTickets: string[] = context.workspaceState.get<string[]>('lastListOfTickets') || [];
+        // Define the workspace data key
+        const WORKSPACE_DATA_KEY = 'ticketData';
 
+        // Retrieve existing workspace data or initialize as an empty object
+        const workspaceData: WorkspaceData = context.workspaceState.get<WorkspaceData>(WORKSPACE_DATA_KEY) || {};
+
+        // Arrays to track the status of each ticket removal
         const removedTickets: string[] = [];
         const nonExistentTickets: string[] = [];
+        const failedDeletions: { ticketId: string; error: string }[] = [];
 
         for (const ticketId of ticketIdsArray) {
-            const ticketIndex = listOfTickets.indexOf(ticketId);
-            if (ticketIndex !== -1) {
-                // Remove the ticketId from the list
-                listOfTickets.splice(ticketIndex, 1);
+            if (workspaceData[ticketId]) {
+                // Remove the ticket data from workspaceData
+                delete workspaceData[ticketId];
                 removedTickets.push(ticketId);
+                console.log(`Removed Ticket ID "${ticketId}" from workspace data.`);
 
                 // Define the path to the ticket folder
                 const ticketFolderPath = path.join(os.homedir(), 'Downloads', 'tickets', ticketId);
@@ -443,8 +456,12 @@ export async function removeTicketIds(context: vscode.ExtensionContext, ticketId
                         // Recursively delete the folder and its contents
                         await fs.promises.rm(ticketFolderPath, { recursive: true, force: true });
                         console.log(`Deleted folder: ${ticketFolderPath}`);
-                    } catch (deleteError) {
+                    } catch (deleteError: any) {
                         console.error(`Failed to delete folder ${ticketFolderPath}:`, deleteError);
+                        failedDeletions.push({
+                            ticketId,
+                            error: deleteError instanceof Error ? deleteError.message : String(deleteError)
+                        });
                         vscode.window.showErrorMessage(`Failed to delete folder for Ticket ID "${ticketId}": ${deleteError instanceof Error ? deleteError.message : String(deleteError)}`);
                     }
                 } else {
@@ -452,17 +469,18 @@ export async function removeTicketIds(context: vscode.ExtensionContext, ticketId
                 }
             } else {
                 nonExistentTickets.push(ticketId);
-                console.log(`Ticket ID "${ticketId}" does not exist in the list.`);
+                console.log(`Ticket ID "${ticketId}" does not exist in workspace data.`);
             }
         }
 
+        // Update the workspaceState with the modified data
+        await context.workspaceState.update(WORKSPACE_DATA_KEY, workspaceData);
 
-        await context.workspaceState.update('lastListOfTickets', listOfTickets);
-
+        // Provide feedback for removed tickets
         if (removedTickets.length > 0) {
             const removedMessage = removedTickets.length === 1
-                ? `Removed Ticket ID "${removedTickets[0]}" from the list and deleted its folder.`
-                : `Removed ${removedTickets.length} Ticket IDs from the list and deleted their folders: ${removedTickets.join(', ')}.`;
+                ? `Removed Ticket ID "${removedTickets[0]}" and deleted its folder.`
+                : `Removed ${removedTickets.length} Ticket IDs and deleted their folders: ${removedTickets.join(', ')}.`;
             vscode.window.showInformationMessage(removedMessage);
             console.log(removedMessage);
         }
@@ -470,10 +488,19 @@ export async function removeTicketIds(context: vscode.ExtensionContext, ticketId
         // Provide feedback for non-existent tickets
         if (nonExistentTickets.length > 0) {
             const nonExistentMessage = nonExistentTickets.length === 1
-                ? `Ticket ID "${nonExistentTickets[0]}" was not found in the list.`
-                : `${nonExistentTickets.length} Ticket IDs were not found in the list: ${nonExistentTickets.join(', ')}.`;
+                ? `Ticket ID "${nonExistentTickets[0]}" was not found in workspace data.`
+                : `${nonExistentTickets.length} Ticket IDs were not found in workspace data: ${nonExistentTickets.join(', ')}.`;
             vscode.window.showWarningMessage(nonExistentMessage);
             console.log(nonExistentMessage);
+        }
+
+        // Provide feedback for failed deletions
+        if (failedDeletions.length > 0) {
+            failedDeletions.forEach(({ ticketId, error }) => {
+                const failureMessage = `Failed to delete folder for Ticket ID "${ticketId}": ${error}`;
+                vscode.window.showErrorMessage(failureMessage);
+                console.log(failureMessage);
+            });
         }
 
         // Handle the case where no tickets were removed
@@ -481,7 +508,7 @@ export async function removeTicketIds(context: vscode.ExtensionContext, ticketId
             vscode.window.showInformationMessage('No Ticket IDs were removed.');
             console.log('No Ticket IDs were removed.');
         }
-    } catch (error) {
+    } catch (error: any) {
         // Handle unexpected errors
         console.error(`Error removing Ticket IDs ${Array.isArray(ticketIds) ? ticketIds.join(', ') : ticketIds}:`, error);
         vscode.window.showErrorMessage(`Error removing Ticket IDs: ${error instanceof Error ? error.message : String(error)}`);
@@ -560,10 +587,7 @@ export async function processTickets(context: vscode.ExtensionContext, ticketIds
  * @param context - The extension context.
  * @param ticketStatuses - An array of TicketStatus objects.
  */
-export async function removeClosedTickets(
-    context: vscode.ExtensionContext,
-    ticketStatuses: TicketStatus[]
-): Promise<void> {
+export async function removeClosedTickets(context: vscode.ExtensionContext, ticketStatuses: TicketStatus[]): Promise<void> {
     try {
         // Step 1: Filter tickets with status "closed" (case-insensitive)
         const closedTickets = ticketStatuses.filter(ticket => ticket.status.toLowerCase() === 'solved');

@@ -136,15 +136,18 @@ export function activate(context: vscode.ExtensionContext) {
 			await processTickets(context, ticketId);
 
         } else if (label === "Scrub Closed Tickets") {
-			// Retrieve 'listOfTickets' from workspaceState
-			const listOfTickets = context.workspaceState.get<string>('lastListOfTickets');
-			if (!listOfTickets) {
-				vscode.window.showErrorMessage("No Assignee ID stored. Please 'Enter Email' first.");
+
+			const WORKSPACE_DATA_KEY = 'ticketData'; // Ensure this matches how you store your data
+    		const workspaceData: WorkspaceData = context.workspaceState.get<WorkspaceData>(WORKSPACE_DATA_KEY) || {};
+			const ticketIds = Object.keys(workspaceData);
+
+			if (!ticketIds) {
+				vscode.window.showErrorMessage("There are no tickets. Please start by adding your email");
 				return;
 			}
-			console.log("List of tickets", listOfTickets);
+			console.log("List of tickets", ticketIds);
 
-			const ticketStatuses = await fetchTicketsStatus(listOfTickets);
+			const ticketStatuses = await fetchTicketsStatus(ticketIds);
 
 			await removeClosedTickets(context, ticketStatuses);
 
