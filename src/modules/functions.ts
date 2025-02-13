@@ -2,13 +2,13 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import axios from 'axios';
 import crypto from 'crypto';
 import { createAuthenticatedAxios, getAttachmentsByTicketId, TicketStatus } from './apis';
 const unzipper = require('unzipper');
 
 // Function to compute SHA256 hash of a file
 async function computeFileHash(filePath: string): Promise<string> {
-    console.log("please work 2.5", filePath);
     return new Promise<string>((resolve, reject) => {
         const hash = crypto.createHash('sha256');
         const stream = fs.createReadStream(filePath);
@@ -75,6 +75,7 @@ export interface AttachmentInfo {
 // Interface ticket number and attachments connected to set ticket
 export interface TicketData {
     attachments: AttachmentInfo[];
+    lastUpdated?: string;
 }
 
 // Interface to hold all the data together
@@ -110,25 +111,25 @@ export async function organizeAndDownloadAttachments(ticketId: string, attachmen
         // The final path to the file
         const filePath = path.join(dateFolderPath, attach.fileName);
 
-        console.log(`Downloading attachment to ${filePath} from ${attach.url}`);
+        //console.log(`Downloading attachment to ${filePath} from ${attach.url}`);
 
         try {
             // Download the file data with duplicate checking
             const savedPath = await downloadFile(attach.url, filePath, axiosInstance, existingHashes);
 
             if (savedPath) {
-                console.log(`Saved attachment: ${savedPath}`);
+                //console.log(`Saved attachment: ${savedPath}`);
 
                 // Compute the hash of the downloaded file
                 const computedHash = await computeFileHash(savedPath);
-                console.log(`Computed hash for ${savedPath}: ${computedHash}`);
+               // console.log(`Computed hash for ${savedPath}: ${computedHash}`);
 
                 // Update the attachment's hash
                 const downloads: AttachmentInfo = {
                 ...attach,
                 hash: computedHash,         // Update the hash field
                 };
-                console.log("testtest 3", downloads);
+             //   console.log("testtest 3", downloads);
 
                 // Check if the file is a ZIP archive
                 if (path.extname(savedPath).toLowerCase() === '.zip') {
@@ -168,7 +169,7 @@ export async function organizeAndDownloadAttachments(ticketId: string, attachmen
  * @returns A promise that resolves to the savePath if the file is unique and saved, or null if skipped.
  */
 async function downloadFile(downloadUrl: string, savePath: string, axiosInstance: any, existingHashes: Set<string>): Promise<string | null> {
-    console.log(`Initiating download from ${downloadUrl} to ${savePath}`);
+  //  console.log(`Initiating download from ${downloadUrl} to ${savePath}`);
 
     // Initialize hash computation
     const hash = crypto.createHash('sha256');
@@ -192,13 +193,15 @@ async function downloadFile(downloadUrl: string, savePath: string, axiosInstance
                 // Pipe the response data to the temporary file
                 response.data.pipe(writer);
 
+                console.log("api call get downloads"  ,response.headers);
+
                 // Handle stream finish event
                 writer.on('finish', () => {
                     const computedHash = hash.digest('hex');
-                    console.log(`Computed hash for ${savePath}: ${computedHash}`);
+                  //  console.log(`Computed hash for ${savePath}: ${computedHash}`);
 
                     if (existingHashes.has(computedHash)) {
-                        console.log(`Duplicate detected for hash ${computedHash}. Skipping file.`);
+                    //    console.log(`Duplicate detected for hash ${computedHash}. Skipping file.`);
                         // Delete the temporary file
                         fs.unlinkSync(tempSavePath);
                         vscode.window.showWarningMessage(`Duplicate attachment detected and skipped: ${path.basename(savePath)}`);
@@ -206,7 +209,7 @@ async function downloadFile(downloadUrl: string, savePath: string, axiosInstance
                     } else {
                         // Rename the temp file to the final save path
                         fs.renameSync(tempSavePath, savePath);
-                        console.log(`File saved successfully to ${savePath}`);
+                     //   console.log(`File saved successfully to ${savePath}`);
                         resolve(savePath); // Indicate successful save
                     }
                 });
@@ -237,7 +240,7 @@ async function downloadFile(downloadUrl: string, savePath: string, axiosInstance
 }
 
 async function handleDuplicateZip(savePath: string, dateFolderPath: string, attachFileName: string): Promise<void> {
-    console.log(`Detected ZIP file: ${savePath}. Attempting to unzip...`);
+   // console.log(`Detected ZIP file: ${savePath}. Attempting to unzip...`);
     try {
         // Open the ZIP file
         const directory = await unzipper.Open.file(savePath);
@@ -322,7 +325,7 @@ async function handleDuplicateZip(savePath: string, dateFolderPath: string, atta
                 entry.stream()
                     .pipe(fs.createWriteStream(finalPath))
                     .on('finish', () => {
-                        console.log(`Extracted to ${finalPath}`);
+                       // console.log(`Extracted to ${finalPath}`);
                         resolve();
                     })
                     .on('error', (err: Error) => { // Explicitly type 'err' as Error
@@ -372,10 +375,10 @@ export async function addTicketIds( context: vscode.ExtensionContext, ticketsToA
                     attachments: attachments
                 };
                 addedTickets.push(ticketId);
-                console.log(`Added new ticket ID: ${ticketId} with ${attachments.length} attachments.`);
+             //   console.log(`Added new ticket ID: ${ticketId} with ${attachments.length} attachments.`);
             } else {
                 existingTickets.push(ticketId);
-                console.log(`Ticket ID already exists: ${ticketId}`);
+              //  console.log(`Ticket ID already exists: ${ticketId}`);
             }
         }
 
@@ -389,7 +392,7 @@ export async function addTicketIds( context: vscode.ExtensionContext, ticketsToA
                     ? `Added Ticket ID "${addedTickets[0]}" with ${ticketsToAdd[addedTickets[0]].length} attachments.`
                     : `Added ${addedTickets.length} Ticket IDs with their attachments.`;
                 vscode.window.showInformationMessage(addedMessage);
-                console.log(`Successfully added Ticket IDs: ${addedTickets.join(', ')}.`);
+               // console.log(`Successfully added Ticket IDs: ${addedTickets.join(', ')}.`);
             }
 
             // Provide feedback for existing tickets
@@ -398,7 +401,7 @@ export async function addTicketIds( context: vscode.ExtensionContext, ticketsToA
                     ? `Ticket ID "${existingTickets[0]}" is already in the list.`
                     : `${existingTickets.length} Ticket IDs are already in the list: ${existingTickets.join(', ')}.`;
                 vscode.window.showInformationMessage(existingMessage);
-                console.log(`Ticket IDs already in the list: ${existingTickets.join(', ')}.`);
+               // console.log(`Ticket IDs already in the list: ${existingTickets.join(', ')}.`);
             }
 
             return {
@@ -524,34 +527,36 @@ export async function processTickets(context: vscode.ExtensionContext, ticketIds
     // Object to map ticket IDs to their successful downloads
     const ticketsToAdd: { [ticketId: string]: AttachmentInfo[] } = {};
 
-        // Retrieve existing hashes from workspaceData
-        const WORKSPACE_DATA_KEY = 'ticketData';
-        const workspaceData: WorkspaceData = context.workspaceState.get<WorkspaceData>(WORKSPACE_DATA_KEY) || {};
-    
-        const existingHashes = new Set<string>();
-        for (const ticket of Object.values(workspaceData)) {
-            for (const attachment of ticket.attachments) {
-                existingHashes.add(attachment.hash);
-            }
-        }
+    // Retrieve existing hashes from workspaceData
+    const WORKSPACE_DATA_KEY = 'ticketData';
+    const workspaceData: WorkspaceData = context.workspaceState.get<WorkspaceData>(WORKSPACE_DATA_KEY) || {};
 
+    const existingHashes = new Set<string>();
+    for (const ticket of Object.values(workspaceData)) {
+        for (const attachment of ticket.attachments) {
+            existingHashes.add(attachment.hash);
+        }
+    }
+
+    const instance = createAuthenticatedAxios();
+    
     for (const ticketId of tickets) {
         try {
+
             // 1. Retrieve attachments (ensure getAttachmentsByTicketId is defined and imported)
-            const attachments = await getAttachmentsByTicketId(ticketId);
+            const attachments = await getAttachmentsByTicketId(ticketId, instance);
 
             if (attachments && attachments.length > 0) {
                 // 2. Organize them into date-based folders, then download
-                console.log("Attachments:", attachments);
+              //  console.log("Attachments:", attachments);
                 const successfulDownloads = await organizeAndDownloadAttachments(ticketId, attachments, existingHashes);
-                console.log("testtest 4", successfulDownloads);
                 if (successfulDownloads.length > 0) {
                     // 3. Map the successful downloads to the ticket ID
                     ticketsToAdd[ticketId] = successfulDownloads;
-                    console.log(`Successfully processed ticket ID: ${ticketId} with ${successfulDownloads.length} attachments.`);
+               //     console.log(`Successfully processed ticket ID: ${ticketId} with ${successfulDownloads.length} attachments.`);
                 } else {
                     vscode.window.showWarningMessage(`No attachments were successfully downloaded for ticket ${ticketId}.`);
-                    console.log(`No attachments were successfully downloaded for ticket ${ticketId}.`);
+               //     console.log(`No attachments were successfully downloaded for ticket ${ticketId}.`);
                 }
             } else {
                 vscode.window.showInformationMessage(`No attachments found for ticket ${ticketId}.`);
@@ -590,7 +595,7 @@ export async function processTickets(context: vscode.ExtensionContext, ticketIds
 export async function removeClosedTickets(context: vscode.ExtensionContext, ticketStatuses: TicketStatus[]): Promise<void> {
     try {
         // Step 1: Filter tickets with status "closed" (case-insensitive)
-        const closedTickets = ticketStatuses.filter(ticket => ticket.status.toLowerCase() === 'solved');
+        const closedTickets = ticketStatuses.filter(ticket => ticket.status.toLowerCase() === 'solved' && ticket.status.toLowerCase() === 'closed');
 
         if (closedTickets.length === 0) {
             vscode.window.showInformationMessage('There are no solved tickets to remove.');
@@ -609,7 +614,6 @@ export async function removeClosedTickets(context: vscode.ExtensionContext, tick
                 ? `Removed closed Ticket ID "${closedTicketIds[0]}".`
                 : `Removed ${closedTicketIds.length} closed Ticket IDs: ${closedTicketIds.join(', ')}.`;
             vscode.window.showInformationMessage(message);
-            console.log(message);
         }
     } catch (error) {
         // Handle any unexpected errors

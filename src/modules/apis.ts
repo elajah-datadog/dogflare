@@ -1,4 +1,4 @@
-import axios from 'axios';
+import axios, { AxiosInstance } from 'axios';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { AttachmentInfo } from './functions';
@@ -10,6 +10,25 @@ require('dotenv').config({ path: '/Users/elajah.gijsbertha/dogflare/.env' });
 const ZENDESK_SUBDOMAIN = process.env.ZENDESK_SUBDOMAIN;
 const ZENDESK_EMAIL = process.env.ZENDESK_EMAIL;
 const ZENDESK_API_TOKEN = process.env.ZENDESK_API_TOKEN;
+
+// Keep a cached singleton of the Axios instance
+let zendeskAxios: AxiosInstance | null = null;
+
+export function createAuthenticatedAxios() {
+    if (!zendeskAxios) {
+        const auth = Buffer.from(`${ZENDESK_EMAIL}/token:${ZENDESK_API_TOKEN}`).toString('base64');
+    
+        zendeskAxios = axios.create({
+          headers: {
+            'Authorization': `Basic ${auth}`,
+            'Content-Type': 'application/json',
+          },
+        });
+    
+      }
+    
+      return zendeskAxios;
+}
 
 // Search Zendesk users by email to find assignee id
 export async function getAssigneeId(email: string): Promise<string | null> {
@@ -24,6 +43,8 @@ export async function getAssigneeId(email: string): Promise<string | null> {
                 'Content-Type': 'application/json'
             }
         });
+
+        console.log("api call get assineeid"  ,response.headers);
 
         const data = response.data;
 
@@ -52,6 +73,9 @@ export async function getTicketsById(storedID: string): Promise<string[] | null>
             }
         });
 
+
+        console.log("api call get tickets"  ,response.headers);
+
         const data = response.data;
 
         // "tickets" is an array of ticket objects
@@ -78,21 +102,15 @@ export async function getTicketsById(storedID: string): Promise<string[] | null>
 
 // Fetch all attachments from ticket comments.
 // Returns an array of { url, createdAt, fileName }, or null if none found.
-export async function getAttachmentsByTicketId(ticketId: string): Promise<AttachmentInfo[] | null> {
-    // Define your Zendesk credentials and subdomain
-    const ZENDESK_SUBDOMAIN = process.env.ZENDESK_SUBDOMAIN!;
-    const ZENDESK_EMAIL = process.env.ZENDESK_EMAIL!;
-    const ZENDESK_API_TOKEN = process.env.ZENDESK_API_TOKEN!;
+export async function getAttachmentsByTicketId(ticketId: string, instance: axios.AxiosInstance): Promise<AttachmentInfo[] | null> {
 
     const apiUrl = `https://${ZENDESK_SUBDOMAIN}.zendesk.com/api/v2/tickets/${ticketId}/comments.json`; // Example endpoint
 
     try {
-        const response = await axios.get(apiUrl, {
-            headers: {
-                'Authorization': `Basic ${Buffer.from(`${ZENDESK_EMAIL}/token:${ZENDESK_API_TOKEN}`).toString('base64')}`,
-                'Content-Type': 'application/json'
-            }
+        const response = await instance.get(apiUrl, {
         });
+
+        console.log("api call get attachments"  ,response.headers);
 
         if (response.status === 200) {
             const comments = response.data.comments;
@@ -122,19 +140,6 @@ export async function getAttachmentsByTicketId(ticketId: string): Promise<Attach
         console.error(`Error retrieving attachments for Ticket ID "${ticketId}":`, error);
         return null;
     }
-}
-
-export function createAuthenticatedAxios() {
-    const auth = Buffer.from(`${ZENDESK_EMAIL}/token:${ZENDESK_API_TOKEN}`).toString('base64');
-
-    const instance = axios.create({
-        headers: {
-            'Authorization': `Basic ${auth}`,
-            'Content-Type': 'application/json',
-        },
-    });
-
-    return instance;
 }
 
 /**

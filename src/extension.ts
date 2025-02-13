@@ -93,10 +93,8 @@ export function activate(context: vscode.ExtensionContext) {
                 return;
             }
             const ticketIds = await getTicketsById(storedID);
-			console.log("test test", ticketIds);
             if (ticketIds && ticketIds.length > 0) {
                 // Show ticket IDs in a user-friendly way
-				console.log("test test 2", ticketIds);
                 vscode.window.showInformationMessage(`Ticket IDs: ${ticketIds.join(', ')}`);;
 				await processTickets(context, ticketIds);
             } else {
